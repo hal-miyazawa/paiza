@@ -34,3 +34,5 @@
 
 # https://paiza.jp/works/mondai/prob60/problem_index?language_uid=python3
 # 文字数を切り取るから
+
+
