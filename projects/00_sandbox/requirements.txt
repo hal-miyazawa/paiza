@@ -1,0 +1,4 @@
+﻿# Recommended (uncomment if needed)
+# ruff
+# pytest
+# ipykernel
