@@ -8,6 +8,7 @@ async def producer(queue):
     for i in range(1, 6):
         await asyncio.sleep(0.5)
         item = f"item-{i}"
+        # put は「空きができるまで待つ」可能性があるので await する
         await queue.put(item)
         print(f"produce: {item} {time.strftime('%X')}")
 
@@ -17,6 +18,7 @@ async def producer(queue):
 
 async def consumer(queue, name):
     while True:
+        # get は「データが来るまで待つ」ので await する
         item = await queue.get()
         try:
             if item is None:
@@ -27,6 +29,7 @@ async def consumer(queue, name):
             await asyncio.sleep(1)
             print(f"{name}: 処理完了 {item} {time.strftime('%X')}")
         finally:
+            # 1件処理したことをキューに通知 (queue.join と対になる)
             queue.task_done()
 
 async def main():
@@ -34,12 +37,15 @@ async def main():
 
     queue = asyncio.Queue()
 
+    # 複数の消費者を走らせる
     consumers = [
         asyncio.create_task(consumer(queue, "consumer-1")),
         asyncio.create_task(consumer(queue, "consumer-2")),
     ]
 
+    # 生産を開始
     await producer(queue)
+    # すべての item が処理されるまで待つ
     await queue.join()
 
     # 念のため消費者タスクの終了を待つ

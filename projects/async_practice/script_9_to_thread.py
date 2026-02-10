@@ -5,6 +5,7 @@ import asyncio
 import time
 
 def blocking_io(name, sec):
+    # 普通の同期関数: ここで time.sleep するとイベントループが止まる
     print(f"{name} (同期) 開始 {time.strftime('%X')}")
     time.sleep(sec)
     print(f"{name} (同期) 終了 {time.strftime('%X')}")
@@ -14,6 +15,7 @@ async def main():
     print(f"main 開始 {time.strftime('%X')}")
 
     # to_thread で同期関数を別スレッドで実行する
+    # こうするとイベントループをブロックせずに進められる
     results = await asyncio.gather(
         asyncio.to_thread(blocking_io, "job-A", 2),
         asyncio.to_thread(blocking_io, "job-B", 3),

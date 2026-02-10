@@ -6,6 +6,7 @@ import time
 
 async def worker(lock, name, delay):
     # lock を取れたタスクだけがクリティカルセクションに入れる
+    # async with は例外時でも lock を解放してくれる
     async with lock:
         print(f"{name} 入室 {time.strftime('%X')}")
         await asyncio.sleep(delay)
