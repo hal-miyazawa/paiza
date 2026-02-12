@@ -1,57 +1,103 @@
-﻿# このスクリプトは asyncio.Queue を使った生産者/消費者モデルを学びます。
-# タスク間で安全にデータを受け渡す仕組みとして活かせます。
+﻿# asyncio.Queue を使った「受注 -> 処理」のサンプル。
+# 学習ポイント:
+# 1) order_receiver が注文をキューに積む
+# 2) worker がキューから取り出して処理する
+# 3) queue.join() は「put された全件に task_done が対応するまで」待つ
+# 補足:
+# - create_task(...) は Task を登録するだけで、その場では待たない
+# - 実際に待つのは await がある場所（put/get/join/gather など）
 
 import asyncio
 import time
 
-async def producer(queue):
-    for i in range(1, 6):
-        await asyncio.sleep(0.5)
-        item = f"item-{i}"
-        # put は「空きができるまで待つ」可能性があるので await する
-        await queue.put(item)
-        print(f"produce: {item} {time.strftime('%X')}")
+# 受注は速く、処理は遅くして待ち行列を見える化する
+ORDER_INTERVAL_SECONDS = 0.3
+WORK_SECONDS = 3.0
+WORKER_COUNT = 2
 
-    # 消費者の数だけ終了シグナル(None)を送る
-    await queue.put(None)
-    await queue.put(None)
 
-async def consumer(queue, name):
+async def order_receiver(order_queue, worker_count):
+    customers = ["青山商事", "北川ストア", "中央オフィス", "東和電機", "南野企画"]
+    for order_id, customer_name in enumerate(customers, start=1):
+        # 受注側は一定間隔で仕事を追加していく（各注文処理の完了は待たない）。
+        await asyncio.sleep(ORDER_INTERVAL_SECONDS)
+        order = {
+            "order_id": order_id,
+            "customer_name": customer_name,
+            "product": "ノートPC",
+            # monotonic は経過時間計測向け。時刻のズレ影響を受けにくい。
+            "accepted_at": time.monotonic(),
+        }
+
+        # put はコルーチン。maxsize を設定していると満杯時にここで待つ。
+        # このサンプルは maxsize=0（上限なし）なので通常はほぼ待たない。
+        await order_queue.put(order)
+        print(
+            f"受注: 注文{order_id} ({customer_name}) {time.strftime('%X')} "
+            f"/ キュー滞留: 約{order_queue.qsize()}件"
+        )
+
+    # worker ごとに終了シグナル(None)を 1 つずつ送る。
+    # これを受けた worker は return して Task 完了になる。
+    for _ in range(worker_count):
+        await order_queue.put(None)
+
+
+async def worker(order_queue, worker_name):
     while True:
-        # get は「データが来るまで待つ」ので await する
-        item = await queue.get()
+        # キューが空なら、注文が来るまでここで待機する。
+        order = await order_queue.get()
         try:
-            if item is None:
-                print(f"{name}: 終了 {time.strftime('%X')}")
+            if order is None:
+                print(f"{worker_name}: 業務終了 {time.strftime('%X')}")
+                # return すると「この worker の Task は完了(done)」になる。
                 return
 
-            print(f"{name}: 処理開始 {item} {time.strftime('%X')}")
-            await asyncio.sleep(1)
-            print(f"{name}: 処理完了 {item} {time.strftime('%X')}")
+            order_id = order["order_id"]
+            customer_name = order["customer_name"]
+            product = order["product"]
+            wait_seconds = time.monotonic() - order["accepted_at"]
+            print(
+                f"{worker_name}: 処理開始 注文{order_id} ({customer_name}/{product}) {time.strftime('%X')} "
+                f"/ 受付から {wait_seconds:.1f} 秒待ち"
+            )
+
+            await asyncio.sleep(WORK_SECONDS)
+            print(f"{worker_name}: 処理完了 注文{order_id} ({customer_name}/{product}) {time.strftime('%X')}")
         finally:
-            # 1件処理したことをキューに通知 (queue.join と対になる)
-            queue.task_done()
+            # 例外/return でも必ず呼ぶ。join の待機解除に必要。
+            order_queue.task_done()
+
 
 async def main():
-    print(f"main 開始 {time.strftime('%X')}")
+    print(
+        f"main 開始 {time.strftime('%X')} "
+        f"(受注間隔={ORDER_INTERVAL_SECONDS}秒, 処理時間={WORK_SECONDS}秒)"
+    )
 
-    queue = asyncio.Queue()
+    # デフォルトは maxsize=0（上限なしキュー）。
+    order_queue = asyncio.Queue()
 
-    # 複数の消費者を走らせる
-    consumers = [
-        asyncio.create_task(consumer(queue, "consumer-1")),
-        asyncio.create_task(consumer(queue, "consumer-2")),
+    # create_task は待たずに即返る。2本の worker を「起動予約」するイメージ。
+    # 複数 worker を先に起動して、注文待ちにしておく。
+    workers = [
+        asyncio.create_task(worker(order_queue, "worker-1")),
+        asyncio.create_task(worker(order_queue, "worker-2")),
     ]
 
-    # 生産を開始
-    await producer(queue)
-    # すべての item が処理されるまで待つ
-    await queue.join()
+    # ここでは「注文をすべてキューに積む」ところまで進む。
+    await order_receiver(order_queue, WORKER_COUNT)
 
-    # 念のため消費者タスクの終了を待つ
-    await asyncio.gather(*consumers)
+    # put した注文 + 終了シグナルが、すべて task_done されるまでここで待つ。
+    await order_queue.join()
+
+    # 各 worker は None を受け取って return 済み。
+    # gather は「全 worker Task 完了」まで待ってから戻る。
+    # (return した Task をここで最終的に回収する)
+    await asyncio.gather(*workers)
 
     print(f"main 終了 {time.strftime('%X')}")
+
 
 if __name__ == "__main__":
     asyncio.run(main())
