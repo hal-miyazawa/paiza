@@ -6,6 +6,9 @@
 # 補足:
 # - create_task(...) は Task を登録するだけで、その場では待たない
 # - 実際に待つのは await がある場所（put/get/join/gather など）
+# - None はキューのデータとして流す「終了シグナル」(task_done とは別物)
+# - put で未完了カウント +1、task_done で -1、join は 0 まで待つ
+# - get した件数と task_done の件数がズレると join が解除されない
 
 import asyncio
 import time
@@ -66,6 +69,7 @@ async def worker(order_queue, worker_name):
             print(f"{worker_name}: 処理完了 注文{order_id} ({customer_name}/{product}) {time.strftime('%X')}")
         finally:
             # 例外/return でも必ず呼ぶ。join の待機解除に必要。
+            # さっき get() で取り出した1件の処理が終わったと伝える
             order_queue.task_done()
 
 
@@ -88,6 +92,7 @@ async def main():
     # ここでは「注文をすべてキューに積む」ところまで進む。
     await order_receiver(order_queue, WORKER_COUNT)
 
+    #キューは入った時点で未完了カウントを持ってるから0になったら先にすすむ
     # put した注文 + 終了シグナルが、すべて task_done されるまでここで待つ。
     await order_queue.join()
 
